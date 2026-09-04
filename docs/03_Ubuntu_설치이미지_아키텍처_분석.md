@@ -63,6 +63,36 @@ self._update_variant(self.model.current.variant)
 쓸지" 서술하는 매니페스트 하나로 구성. 실행 시점에 감지한 환경(GPU 스펙 등)에 맞는
 레이어를 골라 조합하면 된다.
 
+### 코드 레벨 검증 — 레이어들이 실제로 "어떻게" 겹쳐지는가 (2026-09-05 추가)
+위 매니페스트가 "어떤 레이어 조합을 쓸지"는 정하지만, 그 레이어들을 실제로 하나의
+파일시스템으로 합치는 메커니즘(overlayfs)까지는 확인이 안 된 상태였다. Ubuntu의
+`casper`는 GitHub에 없어서(Launchpad에만 존재), 같은 계보의 **Debian `live-boot`**
+(`debian-live/live-boot` — 완전히 같은 SquashFS+overlay 라이브부팅 기법을 씀)에서
+실제 마운트 코드를 확인했다.
+
+`components/9990-misc-helpers.sh`의 `do_union()`:
+```sh
+mkdir "${unionrw}/rw"
+mkdir "${unionrw}/work"
+mount -t overlay -o noatime,lowerdir=${unionro},upperdir=${unionrw}/rw,workdir=${unionrw}/work \
+    overlay "${unionmountpoint}"
+```
+
+`lowerdir`(읽기전용 SquashFS들)은 그대로 두고, `upperdir`/`workdir`은 **tmpfs(RAM) 위**에
+만든다 — 라이브 세션 중 바뀌는 모든 것이 RAM에만 존재하고 재부팅하면 사라지는 이유가
+이거다. 코드 주석에 `# can multiple unionro be used?... perhaps they can be chained`가
+있는데, overlayfs 마운트 한 번에는 lowerdir을 여러 개 못 받는 경우가 있어서 **레이어가
+3개 이상이면 `do_union`을 레이어 개수만큼 연속 호출해서, 이전 오버레이 결과를 다음
+오버레이의 lowerdir로 다시 넣는 식으로 체이닝**한다 — 컨테이너 이미지가 N개 레이어를
+쌓는 것과 완전히 같은 방식이다.
+
+### 응용 착안점 (추가)
+"읽기전용 베이스 + 쓰기전용 임시 레이어"를 겹쳐서 하나처럼 보이게 하는 이 패턴은,
+미림 캐릭터 데이터를 다룰 때도 쓸 수 있다 — 예를 들어 기본 캐릭터 프리셋(읽기전용,
+여러 개를 레이어로 겹침) 위에 사용자가 세션 중 바꾼 것만 별도의 "변경 레이어"에
+기록하고, 저장하지 않으면 그 변경 레이어만 버리면 원본이 전혀 손상되지 않는 구조로
+설계할 수 있다.
+
 ---
 
 ## 2. REST API + Unix 소켓 — 백엔드와 프론트엔드를 언어 무관하게 분리
